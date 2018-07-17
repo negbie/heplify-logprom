@@ -67,7 +67,7 @@ func (l *MasterControl) LoadAllPrograms() error {
 			if fi.IsDir() {
 				continue
 			}
-			err = l.LoadProgram(path.Join(l.programPath, fi.Name()))
+			err = l.LoadProgram(path.Join(l.programPath, fi.Name()), l.hepSrvAddr, l.hepNetType)
 			if err != nil {
 				if l.errorsAbort {
 					return err
@@ -76,7 +76,7 @@ func (l *MasterControl) LoadAllPrograms() error {
 			}
 		}
 	default:
-		err = l.LoadProgram(l.programPath)
+		err = l.LoadProgram(l.programPath, l.hepSrvAddr, l.hepNetType)
 		if err != nil {
 			if l.errorsAbort {
 				return err
@@ -89,7 +89,7 @@ func (l *MasterControl) LoadAllPrograms() error {
 
 // LoadProgram loads or reloads a program from the path specified.  The name of
 // the program is the basename of the file.
-func (l *MasterControl) LoadProgram(programPath string) error {
+func (l *MasterControl) LoadProgram(programPath, addr, nt string) error {
 	name := filepath.Base(programPath)
 	if strings.HasPrefix(name, ".") {
 		glog.V(2).Infof("Skipping %s because it is a hidden file.", programPath)
@@ -111,7 +111,7 @@ func (l *MasterControl) LoadProgram(programPath string) error {
 	}()
 	l.programErrorMu.Lock()
 	defer l.programErrorMu.Unlock()
-	l.programErrors[name] = l.CompileAndRun(name, f)
+	l.programErrors[name] = l.CompileAndRun(name, addr, nt, f)
 	if l.programErrors[name] != nil {
 		if l.errorsAbort {
 			return l.programErrors[name]
@@ -187,9 +187,9 @@ func (l *MasterControl) WriteStatusHTML(w io.Writer) error {
 // exists, the previous virtual machine is terminated and the new loaded over
 // it.  If the new program fails to compile, any existing virtual machine with
 // the same name remains running.
-func (l *MasterControl) CompileAndRun(name string, input io.Reader) error {
+func (l *MasterControl) CompileAndRun(name, addr, nt string, input io.Reader) error {
 	glog.V(2).Infof("CompileAndRun %s", name)
-	v, errs := Compile(name, input, l.dumpAst, l.dumpAstTypes, l.syslogUseCurrentYear, l.overrideLocation)
+	v, errs := Compile(name, addr, nt, input, l.dumpAst, l.dumpAstTypes, l.syslogUseCurrentYear, l.overrideLocation)
 	if errs != nil {
 		ProgLoadErrors.Add(name, 1)
 		return errors.Errorf("compile failed for %s:\n%s", name, errs)
@@ -278,6 +278,9 @@ type MasterControl struct {
 	dumpBytecode         bool           // Instructs the loader to dump to stdout the compiled program after compilation.
 	syslogUseCurrentYear bool           // Instructs the VM to overwrite zero years with the current year in a strptime instruction.
 	omitMetricSource     bool
+
+	hepSrvAddr string
+	hepNetType string
 }
 
 // OverrideLocation sets the timezone location for the VM.
@@ -331,7 +334,7 @@ func OmitMetricSource(l *MasterControl) error {
 }
 
 // NewLoader creates a new program loader that reads programs from programPath.
-func NewLoader(programPath string, store *metrics.Store, lines <-chan *tailer.LogLine, w watcher.Watcher, fs afero.Fs, options ...func(*MasterControl) error) (*MasterControl, error) {
+func NewLoader(programPath, addr, nt string, store *metrics.Store, lines <-chan *tailer.LogLine, w watcher.Watcher, fs afero.Fs, options ...func(*MasterControl) error) (*MasterControl, error) {
 	if store == nil || lines == nil {
 		return nil, errors.New("loader needs a store and lines")
 	}
@@ -344,6 +347,8 @@ func NewLoader(programPath string, store *metrics.Store, lines <-chan *tailer.Lo
 		programErrors: make(map[string]error),
 		watcherDone:   make(chan struct{}),
 		VMsDone:       make(chan struct{}),
+		hepSrvAddr:    addr,
+		hepNetType:    nt,
 	}
 	if err := l.SetOption(options...); err != nil {
 		return nil, err
@@ -380,7 +385,7 @@ func (l *MasterControl) processEvents(events <-chan watcher.Event) {
 		case watcher.Delete:
 			l.UnloadProgram(event.Pathname)
 		case watcher.Update:
-			if err := l.LoadProgram(event.Pathname); err != nil {
+			if err := l.LoadProgram(event.Pathname, l.hepSrvAddr, l.hepNetType); err != nil {
 				glog.Info(err)
 			}
 		case watcher.Create:
@@ -388,7 +393,7 @@ func (l *MasterControl) processEvents(events <-chan watcher.Event) {
 				glog.Info(err)
 				continue
 			}
-			if err := l.LoadProgram(event.Pathname); err != nil {
+			if err := l.LoadProgram(event.Pathname, l.hepSrvAddr, l.hepNetType); err != nil {
 				glog.Info(err)
 			}
 		default:

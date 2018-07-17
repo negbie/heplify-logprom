@@ -107,6 +107,7 @@ var builtins = []string{
 	"getfilename",
 	"int",
 	"len",
+	"sendhep",
 	"settime",
 	"string",
 	"strptime",

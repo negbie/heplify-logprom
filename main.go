@@ -39,6 +39,8 @@ var (
 	port    = flag.String("port", "3903", "HTTP port to listen on.")
 	address = flag.String("address", "", "Host or IP address on which to bind HTTP listener")
 	progs   = flag.String("progs", "", "Name of the directory containing mtail programs")
+	outSrv  = flag.String("hep_srv_addr", "localhost:9060", "HEP output address")
+	netType = flag.String("hep_net_type", "udp", "Network type for HEP output")
 
 	version = flag.Bool("version", false, "Print mtail version information.")
 
@@ -116,6 +118,7 @@ func main() {
 	}
 	opts := []func(*mtail.MtailServer) error{
 		mtail.ProgramPath(*progs),
+		mtail.HepOutput(*outSrv, *netType),
 		mtail.LogPathPatterns(logs...),
 		mtail.BindAddress(*address, *port),
 		mtail.BuildInfo(buildInfo()),

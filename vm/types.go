@@ -207,6 +207,7 @@ var Builtins = map[string]Type{
 	"strtol":      Function(String, Int, Int),
 	"tolower":     Function(String, String),
 	"getfilename": Function(String),
+	"sendhep":     Function(String, String, None),
 }
 
 // FreshType returns a new type from the provided type scheme, replacing any

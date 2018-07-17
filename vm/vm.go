@@ -7,15 +7,19 @@ package vm
 
 import (
 	"bytes"
+	"crypto/tls"
 	"fmt"
 	"math"
+	"net"
 	"regexp"
+	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	proto "github.com/gogo/protobuf/proto"
 	"github.com/golang/glog"
 	"github.com/pkg/errors"
 
@@ -55,6 +59,12 @@ type VM struct {
 
 	syslogUseCurrentYear bool           // Overwrite zero years with the current year in a strptime.
 	loc                  *time.Location // Override local timezone with provided, if not empty
+
+	srvAddr string
+	netType string
+	conn    net.Conn
+	dCh     chan msgcid
+	errCnt  uint64
 }
 
 // Push a value onto the stack
@@ -668,6 +678,13 @@ func (v *VM) execute(t *thread, i instr) {
 		s2 := t.Pop().(string)
 		t.Push(s2 + s1)
 
+	case sendhep:
+		s1 := t.Pop().(string)
+		s2 := t.Pop().(string)
+		if v.conn != nil {
+			v.dCh <- msgcid{m: s1, c: s2}
+		}
+
 	default:
 		v.errorf("illegal instruction: %d", i.op)
 	}
@@ -715,17 +732,30 @@ func (v *VM) Run(_ uint32, lines <-chan *tailer.LogLine, shutdown chan<- struct{
 
 // New creates a new virtual machine with the given name, and compiler
 // artifacts for executable and data segments.
-func New(name string, obj *object, syslogUseCurrentYear bool, loc *time.Location) *VM {
-	return &VM{
-		name:                 name,
-		re:                   obj.re,
-		str:                  obj.str,
-		m:                    obj.m,
-		prog:                 obj.prog,
-		timeMemos:            make(map[string]time.Time),
-		syslogUseCurrentYear: syslogUseCurrentYear,
-		loc:                  loc,
+func New(name, addr, nt string, obj *object, syslogUseCurrentYear bool, loc *time.Location) *VM {
+	var err error
+	var v VM
+
+	v.name = name
+	v.re = obj.re
+	v.str = obj.str
+	v.m = obj.m
+	v.prog = obj.prog
+	v.timeMemos = make(map[string]time.Time)
+	v.syslogUseCurrentYear = syslogUseCurrentYear
+	v.loc = loc
+	v.srvAddr = addr
+	v.netType = nt
+	v.dCh = make(chan msgcid, 20000)
+
+	if v.conn, err = v.ConnectServer(); err != nil {
+		glog.Errorf("%v", err)
 	}
+	for i := 0; i < runtime.NumCPU(); i++ {
+		go v.StartSender()
+	}
+
+	return &v
 }
 
 // DumpByteCode emits the program disassembly and program objects to a string.
@@ -761,4 +791,93 @@ func (v *VM) DumpByteCode(name string) string {
 		glog.Infof("flush error: %s", err)
 	}
 	return b.String()
+}
+
+func (v *VM) ConnectServer() (conn net.Conn, err error) {
+	switch v.netType {
+	case "udp":
+		if v.conn, err = net.Dial(v.netType, v.srvAddr); err != nil {
+			return nil, err
+		}
+	case "tcp":
+		if v.conn, err = net.Dial(v.netType, v.srvAddr); err != nil {
+			return nil, err
+		}
+	case "tls":
+		if v.conn, err = tls.Dial("tcp", v.srvAddr, &tls.Config{InsecureSkipVerify: true}); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("Not supported network type %s", v.netType)
+	}
+
+	return v.conn, nil
+}
+
+type msgcid struct {
+	m string
+	c string
+}
+
+func (v *VM) Close() {
+	if err := v.conn.Close(); err != nil {
+		glog.Errorf("close connection error: %v", err)
+	}
+}
+
+func (v *VM) ReConnect() error {
+	var err error
+	if v.conn != nil {
+		v.Close()
+		glog.Info("close old connection and try to reconnect")
+	}
+	if v.conn, err = v.ConnectServer(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (v *VM) Send(msg []byte) {
+	_, err := v.conn.Write(msg)
+	if err != nil {
+		v.errCnt++
+		if v.errCnt%64 == 0 {
+			v.errCnt = 0
+			glog.Errorf("%v", err)
+			if err = v.ReConnect(); err != nil {
+				glog.Errorf("reconnect error: %v", err)
+				return
+			}
+		}
+	}
+}
+
+func (v *VM) StartSender() {
+	for {
+		select {
+		case msg := <-v.dCh:
+			hep := &HEP{
+				Version:   uint32(2),
+				Protocol:  uint32(17),
+				SrcIP:     "1.1.1.1",
+				DstIP:     "2.2.2.2",
+				SrcPort:   uint32(1111),
+				DstPort:   uint32(2222),
+				Tsec:      uint32(time.Now().Unix()),
+				Tmsec:     uint32(time.Now().Nanosecond() / 1000),
+				ProtoType: 100,
+				NodeID:    uint32(2222),
+				NodePW:    "none",
+				Payload:   msg.m,
+				CID:       msg.c,
+				Vlan:      0,
+			}
+			hepMsg, err := proto.Marshal(hep)
+			fmt.Println(string(hepMsg))
+			if err != nil {
+				glog.Errorf("%v", err)
+			}
+			v.Send(hepMsg)
+		}
+	}
 }

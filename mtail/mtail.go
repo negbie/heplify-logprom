@@ -56,6 +56,9 @@ type MtailServer struct {
 	syslogUseCurrentYear bool // if set, use the current year for timestamps that have no year information
 	omitMetricSource     bool // if set, do not link the source program to a metric
 	omitProgLabel        bool // if set, do not put the program name in the metric labels
+
+	hepSrvAddr string
+	hepNetType string
 }
 
 // StartTailing constructs a new Tailer and commences sending log lines into
@@ -99,7 +102,7 @@ func (m *MtailServer) initLoader() error {
 		opts = append(opts, vm.OverrideLocation(m.overrideLocation))
 	}
 	var err error
-	m.l, err = vm.NewLoader(m.programPath, m.store, m.lines, m.w, m.fs, opts...)
+	m.l, err = vm.NewLoader(m.programPath, m.hepSrvAddr, m.hepNetType, m.store, m.lines, m.w, m.fs, opts...)
 	if err != nil {
 		return err
 	}
@@ -177,6 +180,15 @@ func (m *MtailServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func ProgramPath(path string) func(*MtailServer) error {
 	return func(m *MtailServer) error {
 		m.programPath = path
+		return nil
+	}
+}
+
+// HepOutput sets the hep server address and net type
+func HepOutput(addr, netType string) func(*MtailServer) error {
+	return func(m *MtailServer) error {
+		m.hepSrvAddr = addr
+		m.hepNetType = netType
 		return nil
 	}
 }

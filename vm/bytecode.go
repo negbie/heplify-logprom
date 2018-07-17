@@ -73,6 +73,7 @@ const (
 	icmp // integer compare
 	fcmp // floating point compare
 	scmp // string compare
+	sendhep
 )
 
 var opNames = map[opcode]string{
@@ -131,6 +132,7 @@ var opNames = map[opcode]string{
 	icmp:        "icmp",
 	fcmp:        "fcmp",
 	scmp:        "scmp",
+	sendhep:     "sendhep",
 }
 
 var builtin = map[string]opcode{
@@ -141,6 +143,7 @@ var builtin = map[string]opcode{
 	"strtol":      s2i,
 	"timestamp":   timestamp,
 	"tolower":     tolower,
+	"sendhep":     sendhep,
 }
 
 type instr struct {
