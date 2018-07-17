@@ -36,11 +36,11 @@ func (f *seqStringFlag) Set(value string) error {
 var logs seqStringFlag
 
 var (
-	port    = flag.String("port", "3903", "HTTP port to listen on.")
+	port    = flag.String("port", "9064", "HTTP port to listen on.")
 	address = flag.String("address", "", "Host or IP address on which to bind HTTP listener")
-	progs   = flag.String("progs", "", "Name of the directory containing mtail programs")
+	progs   = flag.String("progs", "./", "Name of the directory containing mtail programs")
 	outSrv  = flag.String("hep_srv_addr", "localhost:9060", "HEP output address")
-	netType = flag.String("hep_net_type", "udp", "Network type for HEP output")
+	netType = flag.String("hep_net_type", "tls", "Network type for HEP output")
 
 	version = flag.Bool("version", false, "Print mtail version information.")
 

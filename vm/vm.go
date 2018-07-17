@@ -6,13 +6,13 @@
 package vm
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/tls"
 	"fmt"
 	"math"
 	"net"
 	"regexp"
-	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -63,6 +63,7 @@ type VM struct {
 	srvAddr string
 	netType string
 	conn    net.Conn
+	w       *bufio.Writer
 	dCh     chan msgcid
 	errCnt  uint64
 }
@@ -679,10 +680,10 @@ func (v *VM) execute(t *thread, i instr) {
 		t.Push(s2 + s1)
 
 	case sendhep:
-		s1 := t.Pop().(string)
-		s2 := t.Pop().(string)
+		cid := t.Pop().(string)
+		msg := t.Pop().(string)
 		if v.conn != nil {
-			v.dCh <- msgcid{m: s1, c: s2}
+			v.dCh <- msgcid{m: msg, c: cid}
 		}
 
 	default:
@@ -750,10 +751,11 @@ func New(name, addr, nt string, obj *object, syslogUseCurrentYear bool, loc *tim
 
 	if v.conn, err = v.ConnectServer(); err != nil {
 		glog.Errorf("%v", err)
+	} else {
+		v.w = bufio.NewWriter(v.conn)
 	}
-	for i := 0; i < runtime.NumCPU(); i++ {
-		go v.StartSender()
-	}
+
+	go v.StartSender()
 
 	return &v
 }
@@ -834,11 +836,13 @@ func (v *VM) ReConnect() error {
 	if v.conn, err = v.ConnectServer(); err != nil {
 		return err
 	}
+	v.w.Reset(v.conn)
 	return nil
 }
 
 func (v *VM) Send(msg []byte) {
-	_, err := v.conn.Write(msg)
+	v.w.Write(msg)
+	err := v.w.Flush()
 	if err != nil {
 		v.errCnt++
 		if v.errCnt%64 == 0 {
@@ -857,23 +861,23 @@ func (v *VM) StartSender() {
 		select {
 		case msg := <-v.dCh:
 			hep := &HEP{
-				Version:   uint32(2),
-				Protocol:  uint32(17),
+				Version:   2,
+				Protocol:  6,
 				SrcIP:     "1.1.1.1",
 				DstIP:     "2.2.2.2",
-				SrcPort:   uint32(1111),
-				DstPort:   uint32(2222),
+				SrcPort:   1111,
+				DstPort:   2222,
 				Tsec:      uint32(time.Now().Unix()),
 				Tmsec:     uint32(time.Now().Nanosecond() / 1000),
 				ProtoType: 100,
-				NodeID:    uint32(2222),
+				NodeID:    2222,
 				NodePW:    "none",
 				Payload:   msg.m,
 				CID:       msg.c,
 				Vlan:      0,
 			}
 			hepMsg, err := proto.Marshal(hep)
-			fmt.Println(string(hepMsg))
+			glog.Infof("hep msg: '%s', hep cid: '%s'", msg.m, msg.c)
 			if err != nil {
 				glog.Errorf("%v", err)
 			}

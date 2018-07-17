@@ -1,6 +1,6 @@
 # heplify-logprom
 
-`heplify-logprom` is a `mtail` fork which is a tool for extracting metrics
+`heplify-logprom` is a [mtail](https://github.com/google/mtail) fork which is a tool for extracting metrics
 from application logs to be exported into a timeseries database
 or timeseries calculator for alerting and dashboarding.
 
