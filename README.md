@@ -6,9 +6,17 @@
 [![CircleCI Build Status](https://circleci.com/gh/google/mtail.svg?style=shield&circle-token=:circle-token)](https://circleci.com/gh/google/mtail)
 [![Coverage Status](https://coveralls.io/repos/github/google/mtail/badge.svg?branch=master)](https://coveralls.io/github/google/mtail?branch=master)
 
-`mtail` is a tool for extracting metrics from application logs to be exported
-into a timeseries database or timeseries calculator for alerting and
-dashboarding.
+`heplify-logprom` is a `mtail` fork which is a tool for extracting metrics
+from application logs to be exported into a timeseries database
+or timeseries calculator for alerting and dashboarding.
+
+`heplify-logprom` provides one additional builtin function 
+```
+sendhep(msg, cid)
+```
+which takes one extracted message together with one extracted correlation ID
+and sends them protobuf encoded to `heplify-server`. With this addition you 
+can ship logs to `heplify-server` and expose metrics for prometheus.
 
 It aims to fill a niche between applications that do not export their own
 internal state, and existing monitoring systems, without patching those
