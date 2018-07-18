@@ -19,11 +19,14 @@ applications or rewriting the same framework for custom extraction glue code.
 The extraction is controlled by [mtail programs](docs/Programming-Guide.md)
 which define patterns and actions:
 
-    # simple line counter
-    counter line_count
-    /$/ {
-      line_count++
-    }
+```
+# send sipwise logs, use value of 'ID=' for correlation
+/.*ID=(?P<cid>\S+)/  {
+  /(?P<msg>.*)/  {
+    sendhep($msg,$cid)
+  }
+}
+```
 
 Metrics are exported for scraping by a collector as JSON or Prometheus format
 over HTTP, or can be periodically sent to a collectd, StatsD, or Graphite
