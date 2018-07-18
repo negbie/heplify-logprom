@@ -36,6 +36,15 @@ type thread struct {
 	stack   []interface{}    // Data stack.
 }
 
+type output struct {
+	srvAddr string
+	netType string
+	conn    net.Conn
+	w       *bufio.Writer
+	dCh     chan msgcid
+	errCnt  uint64
+}
+
 // VM describes the virtual machine for each program.  It contains virtual
 // segments of the executable bytecode, constant data (string and regular
 // expressions), mutable state (metrics), and a stack for the current thread of
@@ -60,12 +69,7 @@ type VM struct {
 	syslogUseCurrentYear bool           // Overwrite zero years with the current year in a strptime.
 	loc                  *time.Location // Override local timezone with provided, if not empty
 
-	srvAddr string
-	netType string
-	conn    net.Conn
-	w       *bufio.Writer
-	dCh     chan msgcid
-	errCnt  uint64
+	o *output
 }
 
 // Push a value onto the stack
@@ -682,9 +686,7 @@ func (v *VM) execute(t *thread, i instr) {
 	case sendhep:
 		cid := t.Pop().(string)
 		msg := t.Pop().(string)
-		if v.conn != nil {
-			v.dCh <- msgcid{m: msg, c: cid}
-		}
+		v.o.dCh <- msgcid{m: msg, c: cid}
 
 	default:
 		v.errorf("illegal instruction: %d", i.op)
@@ -745,17 +747,19 @@ func New(name, addr, nt string, obj *object, syslogUseCurrentYear bool, loc *tim
 	v.timeMemos = make(map[string]time.Time)
 	v.syslogUseCurrentYear = syslogUseCurrentYear
 	v.loc = loc
-	v.srvAddr = addr
-	v.netType = nt
-	v.dCh = make(chan msgcid, 20000)
 
-	if v.conn, err = v.ConnectServer(); err != nil {
+	o := new(output)
+	v.o = o
+	v.o.srvAddr = addr
+	v.o.netType = nt
+	v.o.dCh = make(chan msgcid, 100000)
+
+	if v.o.conn, err = v.ConnectServer(); err != nil {
 		glog.Errorf("%v", err)
 	} else {
-		v.w = bufio.NewWriter(v.conn)
+		v.o.w = bufio.NewWriterSize(v.o.conn, 8192)
+		go v.StartSender()
 	}
-
-	go v.StartSender()
 
 	return &v
 }
@@ -796,24 +800,24 @@ func (v *VM) DumpByteCode(name string) string {
 }
 
 func (v *VM) ConnectServer() (conn net.Conn, err error) {
-	switch v.netType {
+	switch v.o.netType {
 	case "udp":
-		if v.conn, err = net.Dial(v.netType, v.srvAddr); err != nil {
+		if v.o.conn, err = net.Dial(v.o.netType, v.o.srvAddr); err != nil {
 			return nil, err
 		}
 	case "tcp":
-		if v.conn, err = net.Dial(v.netType, v.srvAddr); err != nil {
+		if v.o.conn, err = net.Dial(v.o.netType, v.o.srvAddr); err != nil {
 			return nil, err
 		}
 	case "tls":
-		if v.conn, err = tls.Dial("tcp", v.srvAddr, &tls.Config{InsecureSkipVerify: true}); err != nil {
+		if v.o.conn, err = tls.Dial("tcp", v.o.srvAddr, &tls.Config{InsecureSkipVerify: true}); err != nil {
 			return nil, err
 		}
 	default:
-		return nil, fmt.Errorf("Not supported network type %s", v.netType)
+		return nil, fmt.Errorf("Not supported network type %s", v.o.netType)
 	}
 
-	return v.conn, nil
+	return v.o.conn, nil
 }
 
 type msgcid struct {
@@ -822,31 +826,31 @@ type msgcid struct {
 }
 
 func (v *VM) Close() {
-	if err := v.conn.Close(); err != nil {
+	if err := v.o.conn.Close(); err != nil {
 		glog.Errorf("close connection error: %v", err)
 	}
 }
 
 func (v *VM) ReConnect() error {
 	var err error
-	if v.conn != nil {
+	if v.o.conn != nil {
 		v.Close()
 		glog.Info("close old connection and try to reconnect")
 	}
-	if v.conn, err = v.ConnectServer(); err != nil {
+	if v.o.conn, err = v.ConnectServer(); err != nil {
 		return err
 	}
-	v.w.Reset(v.conn)
+	v.o.w.Reset(v.o.conn)
 	return nil
 }
 
 func (v *VM) Send(msg []byte) {
-	v.w.Write(msg)
-	err := v.w.Flush()
+	v.o.w.Write(msg)
+	err := v.o.w.Flush()
 	if err != nil {
-		v.errCnt++
-		if v.errCnt%64 == 0 {
-			v.errCnt = 0
+		v.o.errCnt++
+		if v.o.errCnt%64 == 0 {
+			v.o.errCnt = 0
 			glog.Errorf("%v", err)
 			if err = v.ReConnect(); err != nil {
 				glog.Errorf("reconnect error: %v", err)
@@ -859,7 +863,7 @@ func (v *VM) Send(msg []byte) {
 func (v *VM) StartSender() {
 	for {
 		select {
-		case msg := <-v.dCh:
+		case msg := <-v.o.dCh:
 			hep := &HEP{
 				Version:   2,
 				Protocol:  6,
@@ -871,7 +875,7 @@ func (v *VM) StartSender() {
 				Tmsec:     uint32(time.Now().Nanosecond() / 1000),
 				ProtoType: 100,
 				NodeID:    2222,
-				NodePW:    "none",
+				NodePW:    "",
 				Payload:   msg.m,
 				CID:       msg.c,
 				Vlan:      0,
@@ -882,6 +886,7 @@ func (v *VM) StartSender() {
 				glog.Errorf("%v", err)
 			}
 			v.Send(hepMsg)
+		default:
 		}
 	}
 }
